@@ -66,10 +66,29 @@
 %% InitParams = [any()]
 %% Result = {ok, pid()} | {error, any()}
 %% @doc Start server listening on IpAddr:Port
+start_link(CallbackModule, {fd, Fd}, Family, InitParams) ->
+    gen_server:start_link(?MODULE, [CallbackModule, {fd, Fd}, Family, InitParams], []);
 start_link(CallbackModule, IpAddr, Port, InitParams) ->
     gen_server:start_link(?MODULE, [CallbackModule, IpAddr, Port, InitParams], []).
 
 %% @hidden
+init([CallbackModule, {fd, Fd}, Family, InitParams]) ->
+    case CallbackModule:init(InitParams) of
+        {ok, ServerState} ->
+            case listen_on(CallbackModule, {fd, Fd}, Family) of
+                {ok, Sock} ->
+                    process_flag(trap_exit, true),
+                    {ok,
+                     #state{cb = CallbackModule,
+                            sock = Sock,
+                            server_state = ServerState}};
+                Error ->
+                    CallbackModule:terminate(Error, ServerState),
+                    Error
+            end;
+        Err ->
+            Err
+    end;
 init([CallbackModule, IpAddr, Port, InitParams]) ->
     case CallbackModule:init(InitParams) of
         {ok, ServerState} ->
@@ -157,6 +176,15 @@ code_change(_OldVsn, State, _Extra) ->
 %% IpAddr = string()
 %% Port = integer()
 %% Result = {ok, port()} | {error, any()}
+listen_on(CallbackModule, {fd, Fd}, Family) ->
+    SockOpts = [{fd, Fd}, Family] ++ CallbackModule:sock_opts(),
+    case gen_tcp:listen(0, SockOpts) of
+        {ok, LSock} ->
+            {ok, _Ref} = prim_inet:async_accept(LSock, -1),
+            {ok, LSock};
+        Err ->
+            Err
+    end;
 listen_on(CallbackModule, IpAddr, Port) ->
     SockOpts = [{ip, IpAddr} | CallbackModule:sock_opts()],
     case gen_tcp:listen(Port, SockOpts) of

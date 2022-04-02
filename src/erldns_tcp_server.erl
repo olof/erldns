@@ -19,6 +19,7 @@
 
 % API
 -export([start_link/2,
+         start_link/3,
          start_link/4]).
 % Gen server hooks
 -export([init/1,
@@ -40,6 +41,10 @@
 -spec start_link(atom(), inet | inet6) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Name, Family) ->
     start_link(Name, Family, erldns_config:get_address(Family), erldns_config:get_port()).
+
+start_link(Name, {fd, Fd}, Family) ->
+    lager:info("Starting TCP server from inherited file descriptor ~p", [Fd]),
+    gen_nb_server:start_link(?MODULE, {fd, Fd}, Family, []).
 
 -spec start_link(atom(), inet | inet6, inet:ip_address(), inet:port_number()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(_Name, Family, Address, Port) ->

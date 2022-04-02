@@ -67,17 +67,28 @@
 get_servers() ->
     case application:get_env(erldns, servers) of
         {ok, Servers} ->
-            lists:map(fun(Server) ->
-                         [{name, keyget(name, Server)},
-                          {address, parse_address(keyget(address, Server))},
-                          {port, keyget(port, Server)},
-                          {family, keyget(family, Server)},
-                          {processes, keyget(processes, Server, 1)}]
-                      end,
-                      Servers);
+            lists:map(fun(Server) -> get_server(Server) end, Servers);
         undefined ->
             lists:map(fun(Family) -> [{name, Family}, {address, get_address(Family)}, {port, get_port()}, {family, Family}] end, [inet, inet6])
     end.
+
+get_server(Server) ->
+    Common = [
+        {name, keyget(name, Server)},
+        {port, keyget(port, Server)},
+        {processes, keyget(processes, Server, 1)}
+    ],
+    lists:concat([Common, case keyget(fd, Server) of
+        undefined -> get_server_listen(Server);
+        _         -> get_server_fd(Server)
+    end]).
+get_server_fd(Server) ->
+    [{fd, keyget(fd, Server)},
+     {proto, keyget(proto, Server)},
+     {family, keyget(family, Server, inet6)}].
+get_server_listen(Server) ->
+    [{address, parse_address(keyget(address, Server))},
+     {family, keyget(family, Server)}].
 
 -ifdef(TEST).
 
@@ -92,15 +103,19 @@ get_servers_empty_list_test() ->
 
 get_servers_single_server_test() ->
     application:set_env(erldns, servers, [[{name, example}, {address, "127.0.0.1"}, {port, 8053}, {family, inet}]]),
-    ?assertEqual([[{name, example}, {address, {127, 0, 0, 1}}, {port, 8053}, {family, inet}, {processes, 1}]], get_servers()).
+    ?assertEqual([[{name, example}, {port, 8053}, {processes, 1}, {address, {127, 0, 0, 1}}, {family, inet}]], get_servers()).
+
+get_servers_single_fd_server_test() ->
+    application:set_env(erldns, servers, [[{name, example}, {fd, 3}, {port, 53}]]),
+    ?assertEqual([[{name, example}, {port, 53}, {processes, 1}, {fd, 3}]], get_servers()).
 
 get_servers_multiple_servers_test() ->
     application:set_env(erldns,
                         servers,
                         [[{name, example_inet}, {address, "127.0.0.1"}, {port, 8053}, {family, inet}],
                          [{name, example_inet6}, {address, "::1"}, {port, 8053}, {family, inet6}]]),
-    ?assertEqual([[{name, example_inet}, {address, {127, 0, 0, 1}}, {port, 8053}, {family, inet}, {processes, 1}],
-                  [{name, example_inet6}, {address, {0, 0, 0, 0, 0, 0, 0, 1}}, {port, 8053}, {family, inet6}, {processes, 1}]],
+    ?assertEqual([[{name, example_inet}, {port, 8053}, {processes, 1}, {address, {127, 0, 0, 1}}, {family, inet}],
+                  [{name, example_inet6}, {port, 8053}, {processes, 1}, {address, {0, 0, 0, 0, 0, 0, 0, 1}}, {family, inet6}]],
                  get_servers()).
 
 -endif.
