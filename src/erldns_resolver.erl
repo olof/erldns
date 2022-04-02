@@ -118,6 +118,18 @@ resolve_no_authority_refused_test() ->
                             Host :: dns:ip(),
                             CnameChain :: [dns:rr()]) ->
                                dns:message().
+resolve_authoritative(Message, Qname, ?DNS_TYPE_AXFR,
+                      #zone{name=Qname, authority=[SOA]}, Host, []) ->
+% case erlrdns_axfr:is_enabled(Host, "...") of ... end,
+%                                    ^^^^^ ???? what should be here?
+  Records = erldns_zone_cache:get_zone_records(Qname),
+  Message#dns_message{aa = true,
+                      rc = ?DNS_RCODE_NOERROR,
+                      authority = [SOA],
+                      % Prepend answer list with our copy of the soa,
+                      % and remove any other soa record. Maybe we should
+                      % do this when writing the zone to the cache instead?
+                      answers = [SOA | [R || R <- Records, R =/= SOA]]};
 resolve_authoritative(Message, Qname, Qtype, Zone, Host, CnameChain) ->
     Result =
         case {erldns_zone_cache:record_name_in_zone(Zone#zone.name, Qname), CnameChain} of
@@ -201,6 +213,32 @@ resolve_authoritative_zone_cut_with_cnames_test() ->
     ?assertEqual(NsRecords, A#dns_message.authority),
     ?assertEqual(CnameRecords, A#dns_message.answers),
     erldns_zone_cache:delete_zone(ZoneName).
+
+resolve_authoritative_axfr_test() ->
+    erldns_zone_cache:start_link(),
+    erldns_handler:start_link(),
+    Qname = <<"example.com">>,
+    Records = [
+      #dns_rr{name = Qname, type = ?DNS_TYPE_SOA},
+      #dns_rr{name = Qname, type = ?DNS_TYPE_A},
+      #dns_rr{name = Qname, type = ?DNS_TYPE_NS},
+      #dns_rr{name = <<"ns1.", Qname/binary>>, type = ?DNS_TYPE_A}
+      #dns_rr{name = <<"ns1.", Qname/binary>>, type = ?DNS_TYPE_SSHFP}
+      #dns_rr{name = <<"ns1.", Qname/binary>>, type = ?DNS_TYPE_AAAA}
+      #dns_rr{name = <<"www.", Qname/binary>>, type = ?DNS_TYPE_A}
+    ],
+    SOA = [hd(Records)],
+    Zone = #zone{name = Qname, authority = SOA},
+    Query = #dns_message{questions = [
+      #dns_query{name = Qname, type = ?DNS_TYPE_AXFR}
+    ]},
+    erldns_zone_cache:put_zone({Qname, <<"_">>, Records}),
+    A = resolve_authoritative(Query, Qname, ?DNS_TYPE_AXFR, Zone, {}, []),
+    ?assertEqual(true, A#dns_message.aa),
+    ?assertEqual(?DNS_RCODE_NOERROR, A#dns_message.rc),
+    ?assertEqual(SOA, A#dns_message.authority),
+    ?assertEqual(Records, A#dns_message.answers),
+    erldns_zone_cache:delete_zone(Qname).
 
 -endif.
 
@@ -735,8 +773,10 @@ check_dnssec(Message, Host, Question) ->
             false
     end.
 
-%% @doc Sort the answers in the given message.
+%% @doc Sort the answers in the given message, unless it's an AXFR response.
 -spec sort_answers(dns:message()) -> dns:message().
+sort_answers(#dns_message{questions=[#dns_query{type=?DNS_TYPE_AXFR}]} = Msg) ->
+    Msg;
 sort_answers(Message) ->
     Message#dns_message{answers = lists:usort(fun sort_fun/2, Message#dns_message.answers)}.
 
